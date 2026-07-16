@@ -47,6 +47,7 @@ public class PlaywrightBrowserClient implements BrowserClient {
             } finally {
                 context.close();
             }
+
         });
     }
 }
