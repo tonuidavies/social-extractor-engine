@@ -9,17 +9,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class ResponseStabilizer {
 
-    /**
-     * After the first playable video request is detected,
-     * give Playwright a brief moment to receive the matching
-     * response and any immediately related network traffic.
-     */
     private static final int STABILIZATION_MS = 150;
 
-    /**
-     * Small grace period if new responses arrive during
-     * stabilization.
-     */
     private static final int EXTRA_WAIT_MS = 50;
 
     public void waitForStable(
