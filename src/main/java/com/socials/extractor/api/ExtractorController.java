@@ -17,10 +17,7 @@ public class ExtractorController {
     private final ExtractorEngine extractorEngine;
 
     @PostMapping
-    public Mono<ExtractionResponse> extract(
-            @Valid
-            @RequestBody ExtractionRequest request
-    ) {
+    public Mono<ExtractionResponse> extract(@Valid @RequestBody ExtractionRequest request) {
 
         return extractorEngine.extract(request);
 

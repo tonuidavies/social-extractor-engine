@@ -20,23 +20,16 @@ import java.util.Map;
 public class MetaMp4Resolver implements BrowserCaptureResolver {
 
     @Override
-    public boolean supports(
-            BrowserCapture capture
-    ) {
-
+    public boolean supports(BrowserCapture capture) {
         return capture.getResponses()
                 .stream()
                 .anyMatch(this::isPlayableVideo);
-
     }
 
     @Override
-    public MediaResult resolve(
-            BrowserCapture capture
-    ) {
+    public MediaResult resolve(BrowserCapture capture) {
 
-        Map<String, BrowserResponse> videos =
-                new LinkedHashMap<>();
+        Map<String, BrowserResponse> videos = new LinkedHashMap<>();
 
         for (BrowserResponse response : capture.getResponses()) {
 
@@ -45,88 +38,47 @@ public class MetaMp4Resolver implements BrowserCaptureResolver {
             }
 
             videos.putIfAbsent(
-
                     normalize(response.getUrl()),
-
                     response
-
             );
-
         }
 
         if (videos.isEmpty()) {
-
-            throw new IllegalStateException(
-                    "No playable Meta video found."
-            );
-
+            throw new IllegalStateException("No playable Meta video found.");
         }
 
-        List<BrowserResponse> responses =
-                new ArrayList<>(videos.values());
+        List<BrowserResponse> responses = new ArrayList<>(videos.values());
 
-        BrowserResponse best =
+        BrowserResponse best = responses.stream()
+                .max(Comparator.comparingLong(this::score))
+                .orElse(responses.getFirst());
 
-                responses.stream()
-
-                        .max(
-
-                                Comparator.comparingLong(
-                                        this::score
-                                )
-
-                        )
-
-                        .orElse(responses.getFirst());
-
-        List<MediaFormat> formats =
-
-                responses.stream()
-
-                        .map(this::toFormat)
-
-                        .toList();
+        List<MediaFormat> formats = responses.stream()
+                .map(this::toFormat)
+                .toList();
 
         return MediaResult.builder()
-
-                .platform(
-                        resolvePlatform(capture)
-                )
-
-                .url(
-                        best.getUrl()
-                )
-
-                .formats(
-                        new ArrayList<>(formats)
-                )
-
+                .platform(resolvePlatform(capture))
+                .url(best.getUrl())
+                .formats(new ArrayList<>(formats))
                 .build();
-
     }
 
     /**
      * Accept only actual video responses.
      */
-    private boolean isPlayableVideo(
-            BrowserResponse response
-    ) {
+    private boolean isPlayableVideo(BrowserResponse response) {
 
-        String url =
-                response.getUrl();
+        String url = response.getUrl();
 
         if (url == null) {
             return false;
         }
 
-        String contentType =
-                response.getContentType();
+        String contentType = response.getContentType();
 
-        if (contentType == null
-                || !contentType.toLowerCase().startsWith("video/")) {
-
+        if (contentType == null || !contentType.toLowerCase().startsWith("video/")) {
             return false;
-
         }
 
         url = url.toLowerCase();
@@ -134,145 +86,83 @@ public class MetaMp4Resolver implements BrowserCaptureResolver {
         return url.contains(".mp4")
                 || url.contains("video.")
                 || url.contains("tag=dash");
-
     }
 
     /**
      * Remove volatile query parameters so the same
      * video isn't stored multiple times.
      */
-    private String normalize(
-            String url
-    ) {
+    private String normalize(String url) {
 
         if (url == null) {
             return "";
         }
 
         return url
-
                 .replaceAll("[?&]bytestart=\\d+", "")
-
                 .replaceAll("[?&]byteend=\\d+", "")
-
                 .replaceAll("[?&]_nc_gid=[^&]+", "")
-
                 .replaceAll("[?&]oh=[^&]+", "")
-
                 .replaceAll("[?&]oe=[^&]+", "");
-
     }
 
     /**
      * Prefer progressive videos, then DASH,
      * then larger files.
      */
-    private long score(
-            BrowserResponse response
-    ) {
+    private long score(BrowserResponse response) {
 
-        String url =
-                response.getUrl()
-                        .toLowerCase();
+        String url = response.getUrl().toLowerCase();
 
-        long score =
-                contentLength(response);
+        long score = contentLength(response);
 
         if (url.contains("progressive")) {
-
             score += 1_000_000;
-
         }
 
         if (url.contains("dash_h264")) {
-
             score += 500_000;
-
         }
 
         if (url.contains("dash_av1")) {
-
             score += 250_000;
-
         }
 
         return score;
-
     }
 
-    private long contentLength(
-            BrowserResponse response
-    ) {
-
+    private long contentLength(BrowserResponse response) {
         try {
-
             return Long.parseLong(
-
-                    response.getHeaders()
-
-                            .getOrDefault(
-                                    "content-length",
-                                    "0"
-                            )
-
+                    response.getHeaders().getOrDefault("content-length", "0")
             );
-
-        }
-
-        catch (Exception ignored) {
-
+        } catch (Exception ignored) {
             return 0L;
-
         }
-
     }
 
-    private MediaFormat toFormat(
-            BrowserResponse response
-    ) {
-
+    private MediaFormat toFormat(BrowserResponse response) {
         return MediaFormat.builder()
-
-                .url(
-                        response.getUrl()
-                )
-
-                .mimeType(
-                        response.getContentType()
-                )
-
-                .contentLength(
-                        contentLength(response)
-                )
-
+                .url(response.getUrl())
+                .mimeType(response.getContentType())
+                .contentLength(contentLength(response))
                 .build();
-
     }
 
-    private Platform resolvePlatform(
-            BrowserCapture capture
-    ) {
+    private Platform resolvePlatform(BrowserCapture capture) {
 
-        String url =
-                capture.getFinalUrl();
+        String url = capture.getFinalUrl();
 
         if (url == null) {
-
             return Platform.INSTAGRAM;
-
         }
 
         url = url.toLowerCase();
 
-        if (url.contains("facebook.com")
-                || url.contains("fb.watch")) {
-
+        if (url.contains("facebook.com") || url.contains("fb.watch")) {
             return Platform.FACEBOOK;
-
         }
 
         return Platform.INSTAGRAM;
-
     }
-
 }

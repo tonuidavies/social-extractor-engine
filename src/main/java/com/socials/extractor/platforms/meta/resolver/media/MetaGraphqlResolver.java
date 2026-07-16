@@ -8,6 +8,9 @@ import com.socials.extractor.model.MediaFormat;
 import com.socials.extractor.model.MediaResult;
 import com.socials.extractor.model.Platform;
 import com.socials.extractor.platforms.meta.resolver.browser.BrowserCaptureResolver;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
@@ -16,282 +19,194 @@ import java.util.Iterator;
 
 @Component
 @Order(1)
-public class MetaGraphqlResolver
-        implements BrowserCaptureResolver {
+public class MetaGraphqlResolver implements BrowserCaptureResolver {
 
-    private final ObjectMapper mapper =
-            new ObjectMapper();
+    private final ObjectMapper mapper = new ObjectMapper();
 
     @Override
-    public boolean supports(
-            BrowserCapture capture
-    ) {
+    public boolean supports(BrowserCapture capture) {
 
-        return capture.getResponses()
+        boolean hasJsonResponses = capture.getResponses().stream()
+                .anyMatch(r -> r.getContentType() != null &&
+                        (r.getContentType().contains("json") || r.getUrl().contains("graphql")));
 
-                .stream()
+        boolean hasHtml = capture.getHtml() != null && !capture.getHtml().isBlank();
 
-                .anyMatch(r ->
-
-                        r.getContentType() != null
-
-                                &&
-
-                                (
-                                        r.getContentType().contains("json")
-                                                || r.getUrl().contains("graphql")
-                                )
-
-                );
-
+        return hasJsonResponses || hasHtml;
     }
 
     @Override
-    public MediaResult resolve(
-            BrowserCapture capture
-    ) {
+    public MediaResult resolve(BrowserCapture capture) {
 
-        MediaResult result =
-                MediaResult.builder()
+        MediaResult result = MediaResult.builder()
+                .platform(Platform.INSTAGRAM)
+                .formats(new ArrayList<>())
+                .build();
 
-                        .platform(
-                                Platform.INSTAGRAM
-                        )
-
-                        .formats(new ArrayList<>())
-
-                        .build();
-
+        // 1. Process XHR Network Responses
         for (BrowserResponse response : capture.getResponses()) {
-
             if (response.getBody() == null) {
                 continue;
             }
-
             try {
-
-                JsonNode root =
-                        mapper.readTree(response.getBody());
-
+                JsonNode root = mapper.readTree(response.getBody());
                 visit(root, result);
-
+            } catch (Exception ignored) {
             }
+        }
 
-            catch (Exception ignored) {
+        // 2. Process Embedded JSON inside the HTML Document
+        if (capture.getHtml() != null && !capture.getHtml().isBlank()) {
+            try {
+                Document document = Jsoup.parse(capture.getHtml());
+                for (Element script : document.select("script")) {
+                    String text = script.html();
+                    if (text == null || text.isBlank()) {
+                        continue;
+                    }
 
+                    // Look for JSON structures injected into scripts
+                    if ("application/json".equals(script.attr("type")) || script.hasAttr("data-sjs") || text.contains("__bbox")) {
+                        try {
+                            JsonNode root = mapper.readTree(text);
+                            visit(root, result);
+                        } catch (Exception ignored) {
+                            // Safely ignore if the script block isn't cleanly parsable JSON
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
             }
-
         }
 
         return result;
-
     }
 
-    private void visit(
-            JsonNode node,
-            MediaResult result
-    ) {
-
+    private void visit(JsonNode node, MediaResult result) {
         if (node == null) {
             return;
         }
 
         /*
-         * video_versions
+         * video_url (Standard posts & some Reels)
+         */
+        if (node.has("video_url")) {
+            String url = node.get("video_url").asText(null);
+            if (url != null && !url.isBlank()) {
+                result.getFormats().add(
+                        MediaFormat.builder()
+                                .url(url)
+                                .mimeType("video/mp4")
+                                .build()
+                );
+
+                if (result.getUrl() == null) {
+                    result.setUrl(url);
+                }
+            }
+        }
+
+        /*
+         * video_versions (Alternate structures)
          */
         if (node.has("video_versions")) {
-
-            JsonNode versions =
-                    node.get("video_versions");
-
+            JsonNode versions = node.get("video_versions");
             if (versions.isArray()) {
-
                 for (JsonNode version : versions) {
-
-                    String url =
-                            version.path("url").asText(null);
-
+                    String url = version.path("url").asText(null);
                     if (url == null) {
                         continue;
                     }
 
                     result.getFormats().add(
-
                             MediaFormat.builder()
-
                                     .url(url)
-
                                     .mimeType("video/mp4")
-
-                                    .width(
-                                            version.has("width")
-                                                    ? version.get("width").asInt()
-                                                    : null
-                                    )
-
-                                    .height(
-                                            version.has("height")
-                                                    ? version.get("height").asInt()
-                                                    : null
-                                    )
-
+                                    .width(version.has("width") ? version.get("width").asInt() : null)
+                                    .height(version.has("height") ? version.get("height").asInt() : null)
                                     .build()
-
                     );
 
                     if (result.getUrl() == null) {
-
                         result.setUrl(url);
-
                     }
-
                 }
-
             }
-
         }
 
         /*
          * thumbnail
          */
         if (result.getThumbnail() == null) {
-
-            String thumb =
-                    findImage(node);
-
+            String thumb = findImage(node);
             if (thumb != null) {
-
-                result.setThumbnail(
-                        thumb
-                );
-
+                result.setThumbnail(thumb);
             }
-
         }
 
         /*
          * title
          */
         if (result.getTitle() == null) {
-
-            String title =
-                    findCaption(node);
-
+            String title = findCaption(node);
             if (title != null) {
-
-                result.setTitle(
-                        title
-                );
-
+                result.setTitle(title);
             }
-
         }
 
         /*
          * duration
          */
-        if (result.getDuration() == null
-                && node.has("video_duration")) {
-
-            result.setDuration(
-
-                    (long)
-
-                            node.get("video_duration")
-
-                                    .asDouble()
-
-            );
-
+        if (result.getDuration() == null && node.has("video_duration")) {
+            result.setDuration((long) node.get("video_duration").asDouble());
         }
 
+        // Recursively search child nodes
         if (node.isObject()) {
-
-            Iterator<JsonNode> iterator =
-                    node.elements();
-
+            Iterator<JsonNode> iterator = node.elements();
             while (iterator.hasNext()) {
-
-                visit(
-                        iterator.next(),
-                        result
-                );
-
+                visit(iterator.next(), result);
             }
-
         }
 
         if (node.isArray()) {
-
             for (JsonNode child : node) {
-
-                visit(
-                        child,
-                        result
-                );
-
+                visit(child, result);
             }
-
         }
-
     }
 
-    private String findCaption(
-            JsonNode node
-    ) {
-
+    private String findCaption(JsonNode node) {
         if (!node.has("caption")) {
             return null;
         }
+        JsonNode caption = node.get("caption");
 
-        JsonNode caption =
-                node.get("caption");
+        if (caption == null || caption.isNull()) {
+            return null;
+        }
 
         if (caption.isTextual()) {
-
             return caption.asText();
-
         }
 
         if (caption.has("text")) {
-
             return caption.get("text").asText();
-
         }
-
         return null;
-
     }
 
-    private String findImage(
-            JsonNode node
-    ) {
-
+    private String findImage(JsonNode node) {
         if (!node.has("image_versions2")) {
             return null;
         }
 
-        JsonNode candidates =
+        JsonNode candidates = node.path("image_versions2").path("candidates");
 
-                node.path("image_versions2")
-
-                        .path("candidates");
-
-        if (!candidates.isArray()
-                || candidates.isEmpty()) {
-
+        if (!candidates.isArray() || candidates.isEmpty()) {
             return null;
-
         }
 
-        return candidates
-
-                .get(0)
-
-                .path("url")
-
-                .asText(null);
-
+        return candidates.get(0).path("url").asText(null);
     }
-
 }

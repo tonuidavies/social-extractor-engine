@@ -7,14 +7,9 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 
 @Component
-public class DefaultExtractorRegistry
-        implements ExtractorRegistry {
-
+public class DefaultExtractorRegistry implements ExtractorRegistry {
     private final List<Extractor> extractors;
-
-    public DefaultExtractorRegistry(
-            List<Extractor> extractors
-    ) {
+    public DefaultExtractorRegistry(List<Extractor> extractors) {
         this.extractors = extractors;
     }
 
