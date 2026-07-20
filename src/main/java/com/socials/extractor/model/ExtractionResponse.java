@@ -1,5 +1,6 @@
 package com.socials.extractor.model;
 
+import com.socials.extractor.browser.BrowserCapture;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -18,5 +19,6 @@ public class ExtractionResponse {
     private MediaResult media;
 
     private long executionTime;
+//    private BrowserCapture capture;
 
 }

@@ -13,64 +13,35 @@ import java.util.List;
 
 @Component
 @RequiredArgsConstructor
-public class DefaultMetaPipeline
-        implements MetaPipeline {
+public class DefaultMetaPipeline implements MetaPipeline {
 
     private final List<PipelineStep> steps;
 
     @Override
-    public Mono<ExtractionResponse> execute(
-            ExtractionRequest request
-    ) {
+    public Mono<ExtractionResponse> execute(ExtractionRequest request) {
+        PipelineContext context = PipelineContext.builder()
+                .url(request.getUrl())
+                .build();
 
-        PipelineContext context =
+        Mono<PipelineContext> pipeline = Mono.just(context);
 
-                PipelineContext.builder()
+        // Filter steps belonging strictly to the meta package
+        List<PipelineStep> metaSteps = steps.stream()
+                .filter(step -> step.getClass().getPackageName().contains("meta"))
+                .sorted(Comparator.comparingInt(PipelineStep::order))
+                .toList();
 
-                        .url(
-                                request.getUrl()
-                        )
-
-                        .build();
-
-        Mono<PipelineContext> pipeline =
-                Mono.just(context);
-
-        for (PipelineStep step :
-
-                steps.stream()
-
-                        .sorted(
-                                Comparator.comparingInt(
-                                        PipelineStep::order
-                                )
-                        )
-
-                        .toList()) {
-
-            pipeline =
-                    pipeline.flatMap(step::execute);
-
+        for (PipelineStep step : metaSteps) {
+            pipeline = pipeline.flatMap(step::execute);
         }
 
         return pipeline.map(this::response);
-
     }
 
-    private ExtractionResponse response(
-            PipelineContext context
-    ) {
-
+    private ExtractionResponse response(PipelineContext context) {
         return ExtractionResponse.builder()
-
-                .success(true)
-
-                .media(
-                        context.getResult()
-                )
-
+                .success(context.getResult() != null && context.getResult().getUrl() != null)
+                .media(context.getResult())
                 .build();
-
     }
-
 }
