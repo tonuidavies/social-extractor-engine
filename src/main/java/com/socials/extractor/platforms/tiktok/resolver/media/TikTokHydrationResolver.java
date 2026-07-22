@@ -16,6 +16,19 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Iterator;
 
+/**
+ * Reads TikTok's hydration JSON (__UNIVERSAL_DATA_FOR_REHYDRATION__ / SIGI_STATE)
+ * and turns it into media formats.
+ *
+ * WATERMARK NOTE — this is the important bit:
+ *   • video.playAddr    → the streaming URL used by the web/app player. CLEAN (no watermark).
+ *   • video.downloadAddr → the URL TikTok uses for the in-app "Save video" action.
+ *                          This file is WATERMARKED (TikTok logo + @username burned in).
+ *
+ * The previous version labelled downloadAddr as "No Watermark" and set it as the
+ * primary URL, which is why saved TikToks came out watermarked. This version
+ * prefers playAddr (clean) and only offers downloadAddr as a labelled fallback.
+ */
 @Component
 @Order(1)
 public class TikTokHydrationResolver implements TikTokBrowserCaptureResolver {
@@ -25,7 +38,8 @@ public class TikTokHydrationResolver implements TikTokBrowserCaptureResolver {
     @Override
     public boolean supports(BrowserCapture capture) {
         if (capture == null || capture.getHtml() == null) return false;
-        return capture.getHtml().contains("__UNIVERSAL_DATA_FOR_REHYDRATION__") || capture.getHtml().contains("SIGI_STATE");
+        return capture.getHtml().contains("__UNIVERSAL_DATA_FOR_REHYDRATION__")
+                || capture.getHtml().contains("SIGI_STATE");
     }
 
     @Override
@@ -38,16 +52,15 @@ public class TikTokHydrationResolver implements TikTokBrowserCaptureResolver {
         try {
             Document document = Jsoup.parse(capture.getHtml());
             Element script = document.selectFirst("script#__UNIVERSAL_DATA_FOR_REHYDRATION__");
-            
             if (script == null) {
                 script = document.selectFirst("script#SIGI_STATE");
             }
-
             if (script != null) {
                 JsonNode root = mapper.readTree(script.html());
                 visit(root, result);
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
         return result;
     }
@@ -55,50 +68,60 @@ public class TikTokHydrationResolver implements TikTokBrowserCaptureResolver {
     private void visit(JsonNode node, MediaResult result) {
         if (node == null) return;
 
-        // Extract Video Formats
         if (node.has("playAddr") || node.has("downloadAddr")) {
-            String playUrl = node.path("playAddr").asText(null);
-            String downloadUrl = node.path("downloadAddr").asText(null); // Usually No-Watermark
-            
+
+            String playUrl = node.path("playAddr").asText(null);      // CLEAN — no watermark
+            String downloadUrl = node.path("downloadAddr").asText(null); // WATERMARKED
+
             Integer width = node.has("width") ? node.get("width").asInt() : null;
             Integer height = node.has("height") ? node.get("height").asInt() : null;
-            String quality = (height != null && height >= 720) ? "HD" : "SD";
+            String q = (height != null && height >= 720) ? "HD" : "SD";
 
-            if (downloadUrl != null && !downloadUrl.isBlank()) {
-                result.getFormats().add(MediaFormat.builder()
-                        .url(downloadUrl)
-                        .mimeType("video/mp4")
-                        .width(width)
-                        .height(height)
-                        .quality(quality + " (No Watermark)")
-                        .build());
-                if (result.getUrl() == null) result.setUrl(downloadUrl);
+            // 1) Preferred: the clean, no-watermark play URL. Also becomes the primary URL.
+            if (playUrl != null && !playUrl.isBlank()) {
+                result.getFormats().add(
+                        MediaFormat.builder()
+                                .url(playUrl)
+                                .mimeType("video/mp4")
+                                .width(width)
+                                .height(height)
+                                .quality(q + " · No Watermark")
+                                .build());
+                if (result.getUrl() == null) result.setUrl(playUrl);
             }
 
-            if (playUrl != null && !playUrl.isBlank()) {
-                result.getFormats().add(MediaFormat.builder()
-                        .url(playUrl)
-                        .mimeType("video/mp4")
-                        .width(width)
-                        .height(height)
-                        .quality(quality)
-                        .build());
-                if (result.getUrl() == null) result.setUrl(playUrl);
+            // 2) Fallback only: the watermarked download URL, clearly labelled.
+            if (downloadUrl != null
+                    && !downloadUrl.isBlank()
+                    && !downloadUrl.equals(playUrl)) {
+                result.getFormats().add(
+                        MediaFormat.builder()
+                                .url(downloadUrl)
+                                .mimeType("video/mp4")
+                                .width(width)
+                                .height(height)
+                                .quality(q + " · Watermarked")
+                                .build());
+                if (result.getUrl() == null) result.setUrl(downloadUrl);
             }
         }
 
-        // Extract Metadata
-        if (result.getTitle() == null && node.has("desc")) result.setTitle(node.get("desc").asText());
+        // Metadata
+        if (result.getTitle() == null && node.has("desc")) {
+            result.setTitle(node.get("desc").asText());
+        }
         if (result.getThumbnail() == null) {
             if (node.has("originCover")) result.setThumbnail(node.get("originCover").asText());
             else if (node.has("cover")) result.setThumbnail(node.get("cover").asText());
         }
-        if (result.getDuration() == null && node.has("duration")) result.setDuration(node.get("duration").asLong());
+        if (result.getDuration() == null && node.has("duration")) {
+            result.setDuration(node.get("duration").asLong());
+        }
 
-        // Recursive tree walk
+        // Recurse
         if (node.isObject()) {
-            Iterator<JsonNode> iterator = node.elements();
-            while (iterator.hasNext()) visit(iterator.next(), result);
+            Iterator<JsonNode> it = node.elements();
+            while (it.hasNext()) visit(it.next(), result);
         } else if (node.isArray()) {
             for (JsonNode child : node) visit(child, result);
         }
