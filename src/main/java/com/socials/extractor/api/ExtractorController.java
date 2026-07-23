@@ -23,12 +23,6 @@ public class ExtractorController {
     private final ExtractorEngine extractorEngine;
     private final ProxyUrlRewriter proxyUrlRewriter;
 
-    /**
-     * Optional fixed public base URL, e.g. https://api.example.com — set this
-     * when the service sits behind a reverse proxy / load balancer so the
-     * generated download links point at the public host instead of the
-     * internal one. When blank, the base URL is derived from the request.
-     */
     @Value("${media.proxy.public-base-url:}")
     private String configuredBaseUrl;
 

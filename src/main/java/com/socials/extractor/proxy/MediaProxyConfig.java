@@ -1,6 +1,8 @@
 package com.socials.extractor.proxy;
 
+import com.socials.extractor.network.ProxySettings;
 import io.netty.channel.ChannelOption;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
@@ -10,28 +12,34 @@ import reactor.netty.http.client.HttpClient;
 import java.time.Duration;
 
 /**
- * Dedicated {@link WebClient} for the media proxy.
+ * Dedicated {@link WebClient} for the media download proxy.
  *
- * <p>Kept separate from any application WebClient so we can tune it purely for
- * streaming large binaries: follow redirects (CDNs love 302s), no automatic
- * decompression (we forward bytes verbatim), and generous timeouts.
+ * <p>Routed through the Webshare proxy too, so downloads come from rotating IPs —
+ * unless {@code proxy.stream-downloads=false}, which keeps the (bandwidth-heavy)
+ * video bytes off the proxy while still proxying extraction. Videos are large, so
+ * proxying downloads is the expensive part of a residential-proxy bill; this flag
+ * lets you separate the two.
  */
 @Configuration
 public class MediaProxyConfig {
 
     @Bean
-    public WebClient mediaProxyWebClient() {
+    public WebClient mediaProxyWebClient(
+            ProxySettings proxy,
+            @Value("${proxy.stream-downloads:true}") boolean streamDownloads) {
 
         HttpClient httpClient = HttpClient.create()
                 .followRedirect(true)
-                .compress(false) // ask for identity; we stream raw bytes downstream
+                .compress(false)
                 .responseTimeout(Duration.ofSeconds(60))
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 15_000);
 
+        if (streamDownloads) {
+            httpClient = proxy.applyReactorProxy(httpClient);
+        }
+
         return WebClient.builder()
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
-                // We never buffer the body into memory (it is streamed), so this
-                // only guards non-streaming paths; keep it high just in case.
                 .codecs(c -> c.defaultCodecs().maxInMemorySize(16 * 1024 * 1024))
                 .build();
     }

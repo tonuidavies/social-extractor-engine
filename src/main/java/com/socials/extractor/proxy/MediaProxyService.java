@@ -24,9 +24,10 @@ import java.util.Set;
  * the origin site would have sent, so hot-link-protected and session-bound URLs
  * (TikTok especially) download successfully instead of returning "Access Denied".
  *
- * <p>Because the same backend that captured the URL is the one re-fetching it,
- * the request originates from the same IP and can carry the same cookies — the
- * two things a session-bound signature checks.
+ * <p>Reddit special case: v.redd.it videos are DASH (separate audio), so for the
+ * REDDIT platform we first try to mux video+audio with ffmpeg (see
+ * {@link RedditMuxer}). If there's no audio track, we transparently fall back to
+ * the normal single-stream proxy below.
  *
  * <p>Bytes are streamed (never fully buffered), and the client's {@code Range}
  * header is forwarded upstream, so seeking and resumable downloads work.
@@ -37,6 +38,7 @@ public class MediaProxyService {
 
     private final WebClient mediaProxyWebClient;
     private final CaptureSessionRegistry sessions;
+    private final RedditMuxer redditMuxer;
 
     /** Response headers we forward from upstream to the client. */
     private static final Set<String> FORWARD_HEADERS = Set.of(
@@ -51,11 +53,6 @@ public class MediaProxyService {
             HttpHeaders.EXPIRES.toLowerCase()
     );
 
-    /**
-     * @param encodedUrl base64url-encoded original CDN URL
-     * @param platform   platform hint (may be null; host is used as fallback)
-     * @param filename   optional download filename for Content-Disposition
-     */
     public Mono<Void> stream(String encodedUrl,
                              Platform platform,
                              String filename,
@@ -78,14 +75,30 @@ public class MediaProxyService {
             return outbound.setComplete();
         }
 
+        // Reddit: try muxing audio+video first; fall back to plain proxy if silent.
+        if (platform == Platform.REDDIT && redditMuxer.isDashVideo(targetUrl)) {
+            return redditMuxer.streamMuxed(targetUrl, filename, outbound)
+                    .switchIfEmpty(Mono.defer(() ->
+                            proxyStream(targetUrl, targetUri, platform, filename, inbound, outbound)));
+        }
+
+        return proxyStream(targetUrl, targetUri, platform, filename, inbound, outbound);
+    }
+
+    /** The normal single-URL streaming proxy (unchanged behaviour). */
+    private Mono<Void> proxyStream(String targetUrl,
+                                   URI targetUri,
+                                   Platform platform,
+                                   String filename,
+                                   ServerHttpRequest inbound,
+                                   ServerHttpResponse outbound) {
+
         final String host = targetUri.getHost();
 
-        // Resolve the profile: explicit platform wins, else infer from host.
         PlatformDownloadProfile profile = (platform != null && platform != Platform.UNKNOWN)
                 ? PlatformDownloadProfile.forPlatform(platform)
                 : PlatformDownloadProfile.forHost(host);
 
-        // Replay the capture session's UA/cookies if we have them for this host.
         String capturedUa = sessions.userAgent(host);
         String capturedCookie = sessions.cookieHeader(host);
 
@@ -98,7 +111,6 @@ public class MediaProxyService {
                         h.set(HttpHeaders.COOKIE, capturedCookie);
                     }
 
-                    // Forward the client's Range so seeking / partial downloads work.
                     List<String> range = inbound.getHeaders().get(HttpHeaders.RANGE);
                     if (range != null && !range.isEmpty()) {
                         h.put(HttpHeaders.RANGE, range);
@@ -123,12 +135,8 @@ public class MediaProxyService {
                                         .build());
                     }
 
-                    // Stream the body straight through — no full-buffer in memory.
                     return outbound.writeWith(upstream.bodyToFlux(DataBuffer.class))
-                            .onErrorResume(err -> {
-                                // Client disconnected mid-stream, etc. Nothing to salvage.
-                                return Mono.empty();
-                            });
+                            .onErrorResume(err -> Mono.empty());
                 })
                 .onErrorResume(err -> {
                     if (!outbound.isCommitted()) {

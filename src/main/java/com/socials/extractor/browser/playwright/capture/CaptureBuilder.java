@@ -11,18 +11,40 @@ import org.springframework.stereotype.Component;
 public class CaptureBuilder {
 
     public BrowserCapture build(Page page, CaptureState state) {
-        String html = "";
-        try {
-            html = page.content();
-        } catch (Exception ex) {
-            log.warn("Failed to capture page content: {}", ex.getMessage());
-        }
-
         return BrowserCapture.builder()
-                .finalUrl(page.url())
-                .html(html)
+                .finalUrl(safeUrl(page))
+                .html(safeContent(page))
                 .requests(state.getRequests())
                 .responses(state.getResponses())
                 .build();
+    }
+
+    private String safeContent(Page page) {
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                return page.content();
+            } catch (Exception e) {
+                try {
+                    page.waitForTimeout(600);
+                } catch (Exception ignore) {
+                }
+            }
+        }
+        // Last resort: read the rendered DOM directly.
+        try {
+            Object html = page.evaluate("document.documentElement.outerHTML");
+            if (html != null) return String.valueOf(html);
+        } catch (Exception e) {
+            log.warn("Failed to capture page content: {}", e.getMessage());
+        }
+        return "";
+    }
+
+    private String safeUrl(Page page) {
+        try {
+            return page.url();
+        } catch (Exception e) {
+            return "";
+        }
     }
 }

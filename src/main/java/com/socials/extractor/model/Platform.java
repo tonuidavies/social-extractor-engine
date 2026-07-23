@@ -10,6 +10,16 @@ public enum Platform {
 
     YOUTUBE,
 
+    TWITTER,
+
+    REDDIT,
+
+    VIMEO,
+
+    PINTEREST,
+
+    THREADS,
+
     UNKNOWN
 
 }
